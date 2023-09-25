@@ -1,0 +1,458 @@
+---
+title: "edit-5.0"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## GitHub Documents
+
+```{r setup, include=FALSE}
+#install.packages("pastecs")
+library(pastecs)
+library(stargazer)
+library(tidyverse)
+library(stringi)
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(glmnet)
+library(naniar)
+library(simputation)
+library(missForest)
+library(plm)
+library(corrplot)
+library(tidymodels)
+library(regclass)
+library(lmtest)
+```
+
+РАЗВЕДОЧНЫЙ АНАЛИЗ ДАННЫХ 
+```{r}
+diplom_1802_imp = read.csv('/Users/olesyamba/Downloads/data/diplom_1802_imp.csv')
+diplom_1802_w_imp = read.csv('/Users/olesyamba/Downloads/data/diplom_1802_w_imp.csv')
+diplom_1802_imp
+```
+
+```{r descriptive statistics}
+diplom_1802_imp = filter(diplom_1802_imp, year != "2016")
+desc = stat.desc(diplom_1802_imp[, c(6, 7,10:20)])
+desc = t(round(desc, digits = 2))
+desc = desc[, c('nbr.val','min', 'max', 'mean', 'median', 'std.dev')]
+desc
+```
+На графике представлены описательные статистики до предварительной обработки, включающей обработку пропущенных значений, обработку выбросов, а также уменьшение дисперсии некоторых переменных с целью борьбы с шумом.
+
+
+```{r descriptive statistics}
+diplom_1802_w_imp = filter(diplom_1802_w_imp, year != "2016")
+desc = stat.desc(diplom_1802_w_imp[, c(6, 7,10:20)])
+desc = t(round(desc, digits = 2))
+desc = desc[, c('nbr.val','min', 'max', 'mean', 'median', 'std.dev')]
+desc
+```
+КОРРЕЛЯЦИОННЫЙ АНАЛИЗ
+```{r}
+library("Hmisc")
+res2 <- rcorr(as.matrix(diplom_1802_w_imp[, c(6:20)]))
+```
+
+```{r}
+matrix_r = as.data.frame(res2$r)
+matrix_p = as.data.frame(res2$P)
+
+empty_as_na <- function(x){
+  ifelse(is.na(x), as.integer('1'), x)
+}
+matrix_r = round(matrix_r, 3)
+matrix_p = matrix_p %>% mutate_each(funs(empty_as_na)) 
+
+for (i in seq.int(1,15,1)){
+  for (j in seq.int(1,15,1)){
+    if (matrix_p[i,j] <= 0.01){
+      matrix_r[i,j] = str_c(as.character(matrix_r[i,j]), as.character('*'))
+    }
+    if (matrix_p[i,j] <= 0.05){
+      matrix_r[i,j] = str_c(as.character(matrix_r[i,j]), as.character('*'))
+    }
+    if (matrix_p[i,j] <= 0.1){
+      matrix_r[i,j] = str_c(as.character(matrix_r[i,j]), as.character('*'))
+    }
+  }
+}
+```
+
+```{r}
+matrix_r
+```
+Цикл позволяет вывести корреляционную матрицу с указанием уровней значимости * = 10%, ** = 5%,*** = 1% соответственно. Борьба с мультиколлинеарностью проводится далее. На данном этапе лишь подтверждается ее необходимость. 
+
+МОДЕЛИРОВАНИЕ
+
+```{r}
+dataPanel <- pdata.frame(diplom_1802_w_imp, index=c("ticker","year"))# трансформация в панельные данные
+filter(dataPanel, year == "2017") %>%
+  group_by(sector)%>%
+  count(sector) # выводим представленный в выборке набор секторов
+```
+
+МОДЕЛЬ МНОЖЕСТВЕННОЙ ЛИНЕЙНОЙ РЕГРЕССИИ
+```{r}
+dataPanel_std <- pdata.frame(data.frame(diplom_1802_w_imp[,c(1:5)], scale(diplom_1802_w_imp[,-c(1:5)])), index=c("ticker","year")) #дополнительно создаем дф с стандартнизированными переменными
+```
+
+```{r}
+ols1 <-plm(price_to_book ~ polarity_news + polarity_twitter + yoy_revenue_growth +  google_trends + number_of_news + number_of_tweets + sales +  ROA + fin_leverage + buyback_yield , data = filter(dataPanel_std, year != "2016"), model="within")
+```
+
+```{r}
+summary(ols1) # оцениваем первую спецификацию как обычную множественную линейную регрессию со стандартизированными коэффициентами 
+```
+
+```{r}
+ols2 <-plm(price_to_book ~ polarity_news + polarity_twitter + yoy_revenue_growth +  google_trends + number_of_news + number_of_likes_twitter + sales +  ROA + fin_leverage + buyback_yield, data = filter(dataPanel_std, year != "2016"), model="within")
+```
+
+```{r}
+summary(ols2)# оцениваем вторую спецификацию как обычную множественную линейную регрессию со стандартизированными коэффициентами
+```
+
+```{r}
+ols3 <-plm(price_to_book ~ polarity_news + polarity_twitter + yoy_revenue_growth +  google_trends + number_of_news + number_of_tweets + sales +  ROA + fin_leverage + buyback_yield, data = filter(dataPanel, year != "2016"), model="within")
+```
+
+```{r}
+summary(ols3) # оцениваем первую спецификацию как обычную множественную линейную регрессию
+```
+
+```{r}
+ols4 <-plm(price_to_book ~ polarity_news + polarity_twitter + yoy_revenue_growth +  google_trends + number_of_news + number_of_likes_twitter + sales +  ROA + fin_leverage + buyback_yield, data = filter(dataPanel, year != "2016"), model="within")
+```
+
+```{r}
+summary(ols4)# оцениваем вторую спецификацию как обычную множественную линейную регрессию 
+```
+
+МОДЕЛЬ МНОЖЕСТВЕННОЙ ЛИНЕЙНОЙ РЕГРЕССИИ | ВЫБОР СПЕЦИФИКАЦИИ
+
+```{r}
+ols <-lm(price_to_book ~ polarity_news + polarity_twitter + yoy_revenue_growth +  google_trends + number_of_news + number_of_tweets + sales +  ROA + fin_leverage + buyback_yield, data = filter(dataPanel, year != "2016"))
+summary(ols)
+```
+
+```{r multicollinearity}
+regclass::VIF(ols)
+```
+Мультиколлинеарности в модели после удаления части переменных нет, так как коэффициенты VIF < 5. Дополнительное подтверждение отсутствию необходимости включения регуляризации.
+Однако в выборке присутствуют компании и года, значительно отличающиеся друг от друга, проверим дополнительные спецификации.
+
+```{r heteroskedasticity}
+bptest(ols4, data = dataPanel)
+```
+
+```{r autocorrelation}
+plm::pbgtest(ols4, data = dataPanel)
+```
+Есть автокорреляция и гетероскедастичность, необходимо использовать скорректированную ковариационную матрицу. 
+
+```{r}
+coeftest(ols4, vcovHC(ols4, method = "arellano", type = "HC2"))
+```
+
+```{r cross-sectional dependence}
+plm::pcdtest(ols4, test = c("cd"))
+```
+no cross-sectional dependence 
+
+```{r cross-sectional dependence}
+plm::pcdtest(ols4, test = c("lm"))
+```
+cross-sectional dependence 
+Вывод: результаты тестов разнятся, однако даже в случае наличия кросс-секциональной зависимости это небольшая проблема, так как у нас короткий временной интервал и большая выборка компаний. 
+
+```{r}
+dwtest(ols)
+```
+
+
+```{r Fixed Effects Model}
+fixed <- plm(price_to_book ~ polarity_news + polarity_twitter + yoy_revenue_growth +  google_trends + number_of_news + number_of_tweets + sales +  ROA + fin_leverage + buyback_yield, data = filter(dataPanel, year != "2016"), model="within")
+summary(fixed)
+```
+
+Фиксированные эффекты = константы для каждой компании:
+```{r effects}
+fixef(fixed)
+```
+ Сравним спецификации с учетом фиксированных эффектов и без:
+```{r Fixed Effects vs OLS}
+pFtest(fixed, ols)
+```
+
+Нулевая гипотеза: спецификация МНК лучше спецификации с фиксированными эффектами
+p-value < 2.2e-16 < 0.01, следовательно, на уровне значимости 1% нулевая гипотеза отклоняется, фиксированные эффекты значимы.
+
+Оценим спецификацию со случайными эффектами: 
+```{r Random Effects Model}
+random <- plm(price_to_book ~ polarity_news + polarity_twitter + yoy_revenue_growth +  google_trends + number_of_news + number_of_tweets + sales +  ROA + fin_leverage + buyback_yield, data = filter(dataPanel, year != "2016"), model="random")
+summary(random)
+```
+Чтобы выбрать между фиксированными или случайными эффектами, проведем тест Хаусмана, где нулевая гипотеза состоит в том, что предпочтительная модель — это случайные эффекты, а альтернативная — фиксированные эффекты (см. Green, 2008, глава 9). По сути, он проверяет, коррелируют ли уникальные ошибки с регрессорами, но нулевая гипотеза заключается в том, что это не так. Если значение p значимо (например, <0,05), необходимо использовать фиксированные эффекты, если нет, - случайные эффекты.
+
+```{r Fixed vs Random}
+phtest(fixed, random)
+```
+В нашем случае p-value < 2.2e-16, на 1% уровне значимости нулевая гипотеза отвергается, следовательно, релевантнее модель с фиксированными эффектами. 
+Также необходимо проверить наличие значимых временных эффектов. 
+
+```{r Time-fixed effects testing}
+fixed.time <- plm(price_to_book ~ polarity_news + polarity_twitter + yoy_revenue_growth +  google_trends + number_of_news + number_of_tweets + sales +  ROA + fin_leverage + buyback_yield + factor(year), data = filter(dataPanel, year != "2016"), model="within")
+summary(fixed.time)
+```
+
+```{r}
+pFtest(fixed.time, fixed)
+```
+Нулевая гипотеза: проверяемый эффект не значим или равен 0.
+ p-value = 0.9741, следовательно, на уровне значимости 1% нулевая гипотеза на исследуемой выборке не отвергается, временные эффекты не значимы. 
+
+```{r}
+plmtest(fixed, c("time"), type=("bp"))
+```
+Результаты теста Бреуша-Пагана аналогичны, наилучшей является спецификация с фиксированными эффектами. 
+
+```{r}
+datapanel_train = filter(dataPanel[,-c(8, 9, 20)], year != "2016" & year !="2017")
+```
+
+
+МОДЕЛЬ БУСТИНГ СЛУЧАЙНЫХ ЛЕСОВ
+```{r BOOSTED RANDOM FOREST}
+#install.packages('xgboost')
+library(xgboost)
+# Create the specification with placeholders
+boost_spec <- boost_tree(
+  trees = 1000,
+  learn_rate = tune(),
+  tree_depth = tune()) %>%
+  set_mode("regression") %>%
+  set_engine("xgboost")
+
+# Create the tuning grid
+tunegrid_boost <- grid_regular(parameters(boost_spec), 
+                               levels = 5)
+
+tunegrid_boost
+
+# Create CV folds of training data
+folds <- vfold_cv(datapanel_train[,-c(1:5)], v = 6)
+
+# Tune along the grid
+tune_results <- tune_grid(boost_spec,
+                          price_to_book ~ .,
+                          resamples = folds,
+                          grid = tunegrid_boost,
+                          metrics = metric_set(rmse, mae, rsq))
+
+# Plot the results
+autoplot(tune_results)
+
+# Select the final hyperparameters
+best_params <- select_best(tune_results)
+
+# Finalize the specification
+final_spec <- finalize_model(boost_spec, best_params)
+
+# Train the final model on the full training data
+final_model <- final_spec %>% fit(formula = price_to_book ~ ., 
+                                  data = datapanel_train[,-c(1:5)])
+
+final_model
+vip::vip(final_model)
+```
+
+```{r parameters of final boosting model}
+best_params
+```
+
+
+КАЧЕСТВО МОДЕЛИ МНОЖЕСТВЕННОЙ ЛИНЕЙНОЙ РЕГРЕССИИ С ВКЛЮЧЕНИЕМ ФИКСИРОВАННЫХ  ЭФФЕКТОВ
+```{r predict fixed_1 model}
+# Predict new data
+predictions_fixed_1 <- predict(ols3,
+                       new_data = datapanel[,-c(1:5)])
+```
+
+```{r evaluate fixed_time model}
+# Compute the mean absolute error using one single function
+mae_fixed_1 = mae(cbind(datapanel[,-c(1:5)], predictions_fixed_1),
+    truth = price_to_book,
+    estimate = predictions_fixed_1)
+# Compute the RMSE using a function
+rmse_fixed_1 = rmse(cbind(datapanel[,-c(1:5)], predictions_fixed_1),
+    truth = price_to_book,
+    estimate = predictions_fixed_1)
+rsq_fixed_1 = rsq_trad(cbind(datapanel[,-c(1:5)], predictions_fixed_1),
+    truth = price_to_book,
+    estimate = predictions_fixed_1)
+
+# Print errors
+mae_fixed_1["model"] = "fixed_1_1"
+#mae_fixedtime
+rmse_fixed_1["model"] = "fixed_1_1"
+#rmse_fixedtime
+rsq_fixed_1["model"] = "fixed_1_1"
+#rsq_fixedtime
+fixed_evaluation_1 = rbind(mae_fixed_1, rmse_fixed_1, rsq_fixed_1)
+fixed_evaluation_1
+```
+
+```{r predict fixed_2}
+# Predict new data
+predictions_fixed_2 <- predict(ols4,
+                       new_data = datapanel[,-c(1:5)])
+```
+
+```{r evaluate fixed_time model}
+# Compute the mean absolute error using one single function
+mae_fixed_2 = mae(cbind(datapanel[,-c(1:5)], predictions_fixed_2),
+    truth = price_to_book,
+    estimate = predictions_fixed_2)
+# Compute the RMSE using a function
+rmse_fixed_2 = rmse(cbind(datapanel[,-c(1:5)], predictions_fixed_2),
+    truth = price_to_book,
+    estimate = predictions_fixed_2)
+rsq_fixed_2 = rsq_trad(cbind(datapanel[,-c(1:5)], predictions_fixed_2),
+    truth = price_to_book,
+    estimate = predictions_fixed_2)
+
+# Print errors
+mae_fixed_2["model"] = "fixed_1_2"
+#mae_fixedtime
+rmse_fixed_2["model"] = "fixed_1_2"
+#rmse_fixedtime
+rsq_fixed_2["model"] = "fixed_1_2"
+#rsq_fixedtime
+fixed_evaluation_2 = rbind(mae_fixed_2, rmse_fixed_2, rsq_fixed_2)
+fixed_evaluation_2
+```
+
+
+КАЧЕСТВО МОДЕЛИ БУСТИНГА СЛУЧАЙНОГО ЛЕСА
+```{r}
+diplom_1802_w_imp = read.csv('/Users/olesyamba/Downloads/data/diplom_1802_w_imp.csv')
+dataPanel <- pdata.frame(diplom_1802_w_imp, index=c("ticker","year"))
+datapanel_test = filter(dataPanel[,-c(8, 9, 20)], year == "2016" | year =="2017")
+```
+
+```{r predict and evaluate boosted random forest model}
+# Predict new data
+predictions_boostforest <- predict(final_model,
+                       new_data = datapanel_test[,-c(1:5)])
+# Compute the mean absolute error using one single function
+mae_boostforest = mae(predictions_boostforest,
+    truth = datapanel_test[,-c(1:5)]$price_to_book,
+    estimate = .pred)
+# Compute the RMSE using a function
+rmse_boostforest = rmse(predictions_boostforest,
+    truth = datapanel_test[,-c(1:5)]$price_to_book,
+    estimate = .pred)
+rsq_boostforest = rsq_trad(predictions_boostforest,
+    truth = datapanel_test[,-c(1:5)]$price_to_book,
+    estimate = .pred)
+
+# Print errors
+mae_boostforest["model"] = "boosted_random_forest"
+#mae_fixedtime
+rmse_boostforest["model"] = "boosted_random_forest"
+#rmse_fixedtime
+rsq_boostforest["model"] = "boosted_random_forest"
+#rsq_fixedtime
+boostforest_evaluation = rbind(mae_boostforest, rmse_boostforest, rsq_boostforest)
+boostforest_evaluation
+```
+
+
+```{r evaluation metrics}
+evaluation_metrics = rbind(fixed_evaluation_1, fixed_evaluation_2, boostforest_evaluation)
+colnames(evaluation_metrics) = c("Metric", "Estimator", "Estimation", "Model")
+evaluation_metrics
+```
+
+АНАЛИЗ УСТОЙЧИВОСТИ
+```{r}
+diplom_1802_w_imp = read.csv('/Users/olesyamba/Downloads/data/diplom_1802_w_imp.csv')
+diplom_1802_w_imp1 = filter(diplom_1802_w_imp, year == "2017"|year == "2018")
+diplom_1802_w_imp2 = filter(diplom_1802_w_imp, year == "2019"|year == "2020")
+diplom_1802_w_imp3 = filter(diplom_1802_w_imp, year == "2021"|year == "2022")
+```
+
+```{r}
+dataPanel1 <- pdata.frame(diplom_1802_w_imp1, index=c("ticker","year"))
+dataPanel2 <- pdata.frame(diplom_1802_w_imp2, index=c("ticker","year"))
+dataPanel3 <- pdata.frame(diplom_1802_w_imp3, index=c("ticker","year"))
+```
+
+
+МОДЕЛЬ МНОЖЕСТВЕННОЙ ЛИНЕЙНОЙ РЕГРЕССИИ
+
+```{r Fixed Effects Model}
+fixed1_1 <- plm(price_to_book ~ polarity_news + polarity_twitter + yoy_revenue_growth +  google_trends + number_of_news + number_of_tweets + sales +  ROA + fin_leverage + buyback_yield, data = dataPanel1, model="within")
+summary(fixed1_1)
+fixed1_2 <- plm(price_to_book ~ polarity_news + polarity_twitter + yoy_revenue_growth +  google_trends + number_of_news + number_of_likes_twitter + sales +  ROA + fin_leverage + buyback_yield, data = dataPanel1, model="within")
+summary(fixed1_2)
+
+fixed2_1 <- plm(price_to_book ~ polarity_news + polarity_twitter + yoy_revenue_growth +  google_trends + number_of_news + number_of_tweets + sales +  ROA + fin_leverage + buyback_yield, data = dataPanel2, model="within")
+summary(fixed2_1)
+fixed2_2 <- plm(price_to_book ~ polarity_news + polarity_twitter + yoy_revenue_growth +  google_trends + number_of_news + number_of_likes_twitter + sales +  ROA + fin_leverage + buyback_yield, data = dataPanel2, model="within")
+summary(fixed2_2)
+
+fixed3_1 <- plm(price_to_book ~ polarity_news + polarity_twitter + yoy_revenue_growth +  google_trends + number_of_news + number_of_tweets + sales +  ROA + fin_leverage + buyback_yield, data = dataPanel3, model="within")
+summary(fixed3_1)
+fixed3_2 <- plm(price_to_book ~ polarity_news + polarity_twitter + yoy_revenue_growth +  google_trends + number_of_news + number_of_likes_twitter + sales +  ROA + fin_leverage + buyback_yield, data = dataPanel3, model="within")
+summary(fixed3_2)
+```
+
+```{r}
+datapanel1 = dataPanel1[,-c(8, 9, 16:20)]
+datapanel2 = dataPanel2[,-c(8, 9, 16:20)]
+datapanel3 = dataPanel3[,-c(8, 9, 16:20)]
+# Train the final model on the full training data
+final_model1 <- final_spec %>% fit(formula = price_to_book ~ ., 
+                                  data = datapanel1[,-c(1:5)])
+final_model2 <- final_spec %>% fit(formula = price_to_book ~ ., 
+                                  data = datapanel2[,-c(1:5)])
+final_model3 <- final_spec %>% fit(formula = price_to_book ~ ., 
+                                  data = datapanel3[,-c(1:5)])
+
+vip::vip(final_model1)
+vip::vip(final_model2)
+vip::vip(final_model3)
+```
+
+
+```{r}
+h1 = vip::vi_model(final_model1)
+h1 = h1 %>% 
+  mutate(model = c(1,1,1,1,1,1,1))
+h2 = vip::vi_model(final_model2)
+h2 = h2 %>% 
+  mutate(model = c(2,2,2,2,2,2,2))
+h3 = vip::vi_model(final_model3)
+h3 = h3 %>% 
+  mutate(model = c(3,3,3,3,3,3,3))
+h = rbind(h1,h2,h3)
+colnames(h) = c("Variable", "Importance", "Model")
+h
+```
+
+```{r}
+
+p = ggplot(h, aes(Variable, Importance, group = Model)) 
+p + geom_line(aes(colour = Model)) + geom_point(aes(colour = Model))
+
+```
+
+
